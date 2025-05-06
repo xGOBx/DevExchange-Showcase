@@ -1,0 +1,191 @@
+name: DevExchange Deployment Workflow
+
+# Configuration variables - easily change these values for different environments
+env:
+  # Azure resource names
+  AZURE_RESOURCE_GROUP: "RealTest"
+  AZURE_FRONTEND_APP_NAME: "DevExchangeClientx"
+  AZURE_BACKEND_APP_NAME: "DevExchangeServerx"
+  
+  # Project directory paths
+  FRONTEND_ROOT_DIR: "code/devexchange.client"
+  FRONTEND_DIST_DIR: "code/devexchange.client/dist"
+  BACKEND_ROOT_DIR: "code/DevExchange.Server"
+  BACKEND_WWWROOT_DIR: "code/DevExchange.Server/wwwroot"
+
+on:
+  pull_request:
+    branches:
+      - AzureProductionDeploy
+    types:
+      - closed
+
+jobs:
+  deploy-frontend:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    environment:
+      name: Azure
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Build Frontend
+      run: |
+        cd ${{ env.FRONTEND_ROOT_DIR }}
+        npm install
+        npm run build
+
+    - name: Prepare Frontend Artifact
+      run: |
+        cd ${{ env.FRONTEND_DIST_DIR }}
+        cp ../../../AzureDeploymentResources/web.config ./
+        
+    - name: Upload Frontend Build
+      uses: actions/upload-artifact@v4
+      with:
+        name: frontend-build
+        path: ${{ env.FRONTEND_DIST_DIR }}
+        retention-days: 1
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with: 
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Set Azure Subscription
+      run: |
+        az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+    - name: Create Frontend ZIP
+      run: |
+        cd ${{ env.FRONTEND_DIST_DIR }}
+        zip -r ../frontend-dist.zip ./*
+
+    - name: Deploy Frontend to Azure App Service
+      run: |
+        cd ${{ env.FRONTEND_ROOT_DIR }}
+        az webapp deploy \
+          --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+          --name ${{ env.AZURE_FRONTEND_APP_NAME }} \
+          --src-path frontend-dist.zip \
+          --type zip
+
+    - name: Verify Frontend Deployment
+      run: |
+        # Dynamically retrieve the frontend URL
+        FRONTEND_URL=$(az webapp list \
+          --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+          --query "[?name=='${{ env.AZURE_FRONTEND_APP_NAME }}'].defaultHostName" \
+          --output tsv | xargs -I {} echo "https://{}")
+        
+        MAX_ATTEMPTS=10
+        ATTEMPT=0
+        
+        while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" $FRONTEND_URL)
+          if [ $RESPONSE -eq 200 ]; then
+            echo "Frontend successfully deployed at $FRONTEND_URL"
+            exit 0
+          fi
+          
+          echo "Frontend not ready. Attempt $((ATTEMPT+1))/$MAX_ATTEMPTS. Status code: $RESPONSE"
+          ATTEMPT=$((ATTEMPT+1))
+          sleep 30
+        done
+        
+        echo "Frontend deployment verification failed"
+        exit 1
+
+  deploy-backend:
+    needs: deploy-frontend
+    runs-on: ubuntu-latest
+    environment:
+      name: Azure
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download Frontend Build
+      uses: actions/download-artifact@v4
+      with:
+        name: frontend-build
+        path: ${{ env.BACKEND_WWWROOT_DIR }}
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with: 
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Set Azure Subscription
+      run: |
+        az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+    - name: Verify Frontend Files in Backend
+      run: |
+        echo "Frontend files in wwwroot:"
+        ls -la ${{ env.BACKEND_WWWROOT_DIR }}
+
+    - name: Publish .NET Backend
+      run: |
+        dotnet publish ./${{ env.BACKEND_ROOT_DIR }} \
+          --configuration Release \
+          --output ${{ github.workspace }}/publish
+
+    - name: Zip Backend
+      run: |
+        cd ${{ github.workspace }}/publish
+        zip -r ${{ github.workspace }}/backend.zip .
+
+    - name: Deploy Backend to Azure App Service
+      run: |
+        az webapp deploy \
+          --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+          --name ${{ env.AZURE_BACKEND_APP_NAME }} \
+          --src-path ${{ github.workspace }}/backend.zip \
+          --type zip
+
+    - name: Fetch Deployment Logs
+      run: |
+        # Get recent deployment logs
+        az webapp log deployment show \
+          --name ${{ env.AZURE_BACKEND_APP_NAME }} \
+          --resource-group ${{ env.AZURE_RESOURCE_GROUP }}
+
+    - name: Verify Backend Deployment
+      run: |
+        # Dynamically retrieve the backend URL
+        BACKEND_URL=$(az webapp list \
+          --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+          --query "[?name=='${{ env.AZURE_BACKEND_APP_NAME }}'].defaultHostName" \
+          --output tsv | xargs -I {} echo "https://{}")
+        
+        MAX_ATTEMPTS=10
+        ATTEMPT=0
+        
+        while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" $BACKEND_URL)
+          if [ $RESPONSE -eq 200 ]; then
+            echo "Backend successfully deployed at $BACKEND_URL"
+            exit 0
+          fi
+          
+          echo "Backend not ready. Attempt $((ATTEMPT+1))/$MAX_ATTEMPTS. Status code: $RESPONSE"
+          ATTEMPT=$((ATTEMPT+1))
+          sleep 30
+        done
+        
+        echo "Backend deployment verification failed"
+        exit 1
