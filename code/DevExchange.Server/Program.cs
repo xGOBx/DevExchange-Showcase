@@ -15,11 +15,6 @@ namespace DevExchange.Server
         public static void Main(string[] args)
         {
             var builder = WebApplication.CreateBuilder(args);
-            builder.WebHost.ConfigureKestrel(options =>
-            {
-                options.ListenAnyIP(80);
-            });
-
 
             // Add services to the container.
             builder.Services.AddControllers();
@@ -31,34 +26,32 @@ namespace DevExchange.Server
             builder.Services.AddScoped<IBlobStorageService>(provider =>
             {
                 var configuration = provider.GetRequiredService<IConfiguration>();
-                // No need to check connection string here as it's already checked in the constructor
                 return new BlobStorageService(configuration);
             });
 
 
-            // Database configuration for development, Docker, and production
+
+            // Database configuration for development, production, and Docker
             builder.Services.AddDbContext<ApplicationDbContext>(options =>
             {
                 if (builder.Environment.IsDevelopment())
                 {
                     // Check if running in Docker
-                    bool isRunningInDocker = Environment.GetEnvironmentVariable("RUNNING_IN_DOCKER") == "true";
-
-                    if (isRunningInDocker)
+                    if (Environment.GetEnvironmentVariable("RUNNING_IN_DOCKER") == "true")
                     {
                         // Use Docker SQL Server connection when running in Docker
                         var dockerConnectionString = builder.Configuration.GetConnectionString("DockerConnection");
                         options.UseSqlServer(dockerConnectionString, sqlServerOptions =>
                         {
                             sqlServerOptions.EnableRetryOnFailure(
-                                maxRetryCount: 3,
-                                maxRetryDelay: TimeSpan.FromSeconds(15),
+                                maxRetryCount: 5,
+                                maxRetryDelay: TimeSpan.FromSeconds(30),
                                 errorNumbersToAdd: null);
                         });
                     }
                     else
                     {
-                        // Use local SQL Server database for local development
+                        // Use local SQL Server database for development outside Docker
                         var localConnectionString = builder.Configuration.GetConnectionString("LocalConnection");
                         options.UseSqlServer(localConnectionString, sqlServerOptions =>
                         {
@@ -91,7 +84,7 @@ namespace DevExchange.Server
                     {
                         // Development CORS configuration
                         var devOrigins = builder.Configuration.GetSection("Cors:DevelopmentOrigins").Get<string[]>()
-                            ?? new[] { "https://localhost:5173" }; // Default if not configured
+                            ?? new[] { "https://localhost:3000", "http://localhost:5713", "http://localhost:3000" };
 
                         policyBuilder
                             .WithOrigins(devOrigins)
@@ -180,11 +173,11 @@ namespace DevExchange.Server
             //}
 
             // Configure Swagger
-            //if (app.Environment.IsDevelopment())
-           
-            app.UseSwagger();
-            app.UseSwaggerUI();
-           
+            if (app.Environment.IsDevelopment())
+            {
+                app.UseSwagger();
+                app.UseSwaggerUI();
+            }
 
             app.UseDefaultFiles();
 
@@ -214,10 +207,9 @@ namespace DevExchange.Server
             if (!app.Environment.IsDevelopment())
             {
                 app.UseHsts();
-                app.UseHttpsRedirection();
-
             }
 
+            app.UseHttpsRedirection();
             app.UseRouting();
 
             app.UseCors("ReactApp");
@@ -226,7 +218,22 @@ namespace DevExchange.Server
             app.MapIdentityApi<User>();
             app.MapControllers();
 
-            app.MapFallbackToFile("index.html");
+            app.Map("/api/{**catchall}", () => Results.NotFound());
+
+
+            try
+            {
+                using (var scope = app.Services.CreateScope())
+                {
+                    var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+                    dbContext.Database.Migrate();
+                }
+            }
+            catch (Exception ex)
+            {
+                var logger = app.Services.GetRequiredService<ILogger<Program>>();
+                logger.LogError(ex, "An error occurred while migrating the database.");
+            }
 
             app.Run();
         }

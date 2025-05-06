@@ -23,9 +23,10 @@ namespace DevExchange.Server.Controllers.UploadManager
     public class BlobStorageService : IBlobStorageService
     {
         private readonly BlobServiceClient _blobServiceClient;
- 
+        private readonly string? _accountName;
+        private readonly string? _accountKey;
         private readonly string? _storageUri;
-        private readonly string? connectionString;
+        private readonly string? _connectionString;
 
 
         /// <summary>
@@ -34,8 +35,11 @@ namespace DevExchange.Server.Controllers.UploadManager
         /// <param name="configuration">Configuration to retrieve storage settings</param>
         public BlobStorageService(IConfiguration configuration)
         {
-            connectionString = Environment.GetEnvironmentVariable("AzureStorage__ConnectionString");
-            _blobServiceClient = new BlobServiceClient(connectionString);
+            _connectionString = Environment.GetEnvironmentVariable("AzureStorage__ConnectionString");
+            _blobServiceClient = new BlobServiceClient(_connectionString);
+            _accountName = Environment.GetEnvironmentVariable("AzureStorage__AccountName");
+
+            _accountKey = Environment.GetEnvironmentVariable("AzureStorage__AccountKey");
             _storageUri = Environment.GetEnvironmentVariable("AzureStorage__BaseUrl");
 
         }

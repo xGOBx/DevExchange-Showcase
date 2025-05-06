@@ -1,0 +1,52 @@
+version: '3.4'
+services:
+  devexchange.server:
+    image: mcr.microsoft.com/dotnet/sdk:8.0
+    ports:
+      - "5000:80"
+      - "5001:443"
+    volumes:
+      - .:/src
+      - ${APPDATA}/Microsoft/UserSecrets:/root/.microsoft/usersecrets:ro
+      - ${APPDATA}/ASP.NET/Https:/root/.aspnet/https:ro
+    working_dir: /src/DevExchange.Server
+    # Generate dev cert and then run the app with HTTP only
+    command: sh -c "dotnet dev-certs https && dotnet watch run --urls=http://+:80"
+    environment:
+      - ASPNETCORE_URLS=http://+:80
+      - ASPNETCORE_ENVIRONMENT=Development
+      - DOTNET_USE_POLLING_FILE_WATCHER=1
+      - RUNNING_IN_DOCKER=true
+      - ConnectionStrings__DockerConnection=Server=sql-server;Database=DevExchange;User=sa;Password=YourStrongPassword!;TrustServerCertificate=True;
+      # Disable SPA proxy since we're running frontend separately
+      - ASPNETCORE_DISABLESPAPROXY=true
+    depends_on:
+      - sql-server
+  
+  devexchange.client:
+    image: node:20-alpine
+    ports:
+      - "3000:5713"
+    volumes:
+      - ./devexchange.client:/usr/src/app
+    working_dir: /usr/src/app
+    command: sh -c "npm install && npm run dev -- --port=5713 --host=0.0.0.0"
+    environment:
+      - NODE_ENV=development
+      - RUNNING_IN_DOCKER=true
+      - VITE_API_URL=http://localhost:5000  # Changed to HTTP since we're disabling HTTPS
+    depends_on:
+      - devexchange.server
+
+  sql-server:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=YourStrongPassword!
+      - MSSQL_PID=Express
+    ports:
+      - "1433:1433"
+    volumes:
+      - sql-data:/var/opt/mssql
+volumes:
+  sql-data:
