@@ -1,4 +1,6 @@
-# Software Engineering Internship Project Showcase
+# Dev-Exchange Showcase (Software Engineering Internship Project)
+
+
 
 This is a showcase repository for the project I completed during my Software Engineering internship. There are several branches in this repository to demonstrate my skills in various aspects of this project and software engineering in general:
 
